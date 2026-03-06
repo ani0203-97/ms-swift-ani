@@ -1308,6 +1308,98 @@ class KendallTau(ORM):
         return rewards
 
 
+class KVCerReward(ORM):
+    """CER-based reward for KV extraction: reward = 1 - CER (clamped to [0, 1])."""
+
+    @staticmethod
+    def _normalize(text: str) -> str:
+        if not text:
+            return ''
+        return ' '.join(text.split())
+
+    @staticmethod
+    def _strip_ocr(text: str) -> str:
+        return re.sub(r'</?ocr>', '', text).strip()
+
+    def __call__(self, completions, solution, **kwargs) -> List[float]:
+        rewards = []
+        for completion, sol in zip(completions, solution):
+            pred = self._normalize(self._strip_ocr(completion))
+            gt = self._normalize(self._strip_ocr(sol))
+            if len(gt) == 0:
+                cer = 0.0 if len(pred) == 0 else 1.0
+            else:
+                cer = _fast_edit_distance(gt, pred) / len(gt)
+            rewards.append(max(0.0, 1.0 - cer))
+        return rewards
+
+
+class KVCheckboxReward(ORM):
+    """Checkbox sequence accuracy reward for KV extraction."""
+
+    _CHECKBOX_RE = re.compile(r'(<checked>|<unchecked>)')
+
+    @staticmethod
+    def _normalize_checkboxes(text: str) -> str:
+        text = re.sub(r'\[\s*\]', '<unchecked>', text)
+        text = re.sub(r'\[[xX]\]', '<checked>', text)
+        return text
+
+    @staticmethod
+    def _strip_ocr(text: str) -> str:
+        return re.sub(r'</?ocr>', '', text).strip()
+
+    def __call__(self, completions, solution, **kwargs) -> List[float]:
+        rewards = []
+        for completion, sol in zip(completions, solution):
+            pred = self._normalize_checkboxes(self._strip_ocr(completion))
+            gt = self._normalize_checkboxes(self._strip_ocr(sol))
+            ref_seq = self._CHECKBOX_RE.findall(gt)
+            hyp_seq = self._CHECKBOX_RE.findall(pred)
+            if not ref_seq and not hyp_seq:
+                rewards.append(1.0)
+            elif not ref_seq:
+                rewards.append(0.0)
+            else:
+                dist = _fast_edit_distance(ref_seq, hyp_seq)
+                rewards.append(max(0.0, 1.0 - dist / len(ref_seq)))
+        return rewards
+
+
+class KVSpecialTokenReward(ORM):
+    """Special token recall reward (<signature>, <empty>) for KV extraction."""
+
+    _TOKENS = ['<signature>', '<empty>']
+
+    @staticmethod
+    def _strip_ocr(text: str) -> str:
+        return re.sub(r'</?ocr>', '', text).strip()
+
+    def __call__(self, completions, solution, **kwargs) -> List[float]:
+        rewards = []
+        for completion, sol in zip(completions, solution):
+            pred = self._strip_ocr(completion)
+            gt = self._strip_ocr(sol)
+            recalls: List[float] = []
+            for token in self._TOKENS:
+                gt_count = gt.count(token)
+                if gt_count > 0:
+                    recalls.append(min(pred.count(token) / gt_count, 1.0))
+            rewards.append(sum(recalls) / len(recalls) if recalls else 1.0)
+        return rewards
+
+
+class KVFormatReward(ORM):
+    """Format reward: checks that KV output is wrapped in <ocr>...</ocr> tags."""
+
+    def __call__(self, completions, solution, **kwargs) -> List[float]:
+        rewards = []
+        for completion in completions:
+            has_tags = bool(re.search(r'<ocr>.*</ocr>', completion, re.DOTALL))
+            rewards.append(1.0 if has_tags else 0.0)
+        return rewards
+
+
 orms = {
     'toolbench': ReactORM,
     'math': MathORM,
@@ -1330,4 +1422,8 @@ orms = {
     'checkbox_tag_accuracy': CheckboxTagAccuracy,
     'ocr_length_penalty': OCRLengthPenalty,
     'kendall_tau': KendallTau,
+    'kv_cer': KVCerReward,
+    'kv_checkbox': KVCheckboxReward,
+    'kv_special_token': KVSpecialTokenReward,
+    'kv_format': KVFormatReward,
 }
