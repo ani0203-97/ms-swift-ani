@@ -1334,6 +1334,37 @@ class KVCerReward(ORM):
         return rewards
 
 
+class KVCerUnclampedReward(ORM):
+    """CER-based reward for KV extraction: reward = 1 - CER (unclamped, can go negative).
+
+    Unlike KVCerReward, this does NOT clamp to [0, 1]. When CER > 1 (e.g. verbose
+    outputs with many insertions), the reward goes negative, giving the model a
+    stronger gradient signal to avoid verbosity.
+    """
+
+    @staticmethod
+    def _normalize(text: str) -> str:
+        if not text:
+            return ''
+        return ' '.join(text.split())
+
+    @staticmethod
+    def _strip_ocr(text: str) -> str:
+        return re.sub(r'</?ocr>', '', text).strip()
+
+    def __call__(self, completions, solution, **kwargs) -> List[float]:
+        rewards = []
+        for completion, sol in zip(completions, solution):
+            pred = self._normalize(self._strip_ocr(completion))
+            gt = self._normalize(self._strip_ocr(sol))
+            if len(gt) == 0:
+                cer = 0.0 if len(pred) == 0 else 1.0
+            else:
+                cer = _fast_edit_distance(gt, pred) / len(gt)
+            rewards.append(1.0 - cer)
+        return rewards
+
+
 class KVCheckboxReward(ORM):
     """Checkbox sequence accuracy reward for KV extraction."""
 
@@ -1423,6 +1454,7 @@ orms = {
     'ocr_length_penalty': OCRLengthPenalty,
     'kendall_tau': KendallTau,
     'kv_cer': KVCerReward,
+    'kv_cer_unclamped': KVCerUnclampedReward,
     'kv_checkbox': KVCheckboxReward,
     'kv_special_token': KVSpecialTokenReward,
     'kv_format': KVFormatReward,
