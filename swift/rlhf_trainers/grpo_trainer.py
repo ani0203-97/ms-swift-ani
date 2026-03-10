@@ -928,8 +928,11 @@ class GRPOTrainer(RolloutTrainerMixin, SwiftMixin, HFGRPOTrainer):
             batch_encoded_inputs.update(extra_kwargs)
 
             with torch.no_grad(), disable_gradient_checkpointing(self.model, self.args.gradient_checkpointing_kwargs):
-                batch_encoded_inputs['old_per_token_logps'] = (
-                    self._get_per_token_logps_and_entropies(self.model, batch_encoded_inputs)[0])
+                if self.old_policy():
+                    batch_encoded_inputs['old_per_token_logps'] = (
+                        self._get_per_token_logps_and_entropies(self.model, batch_encoded_inputs)[0])
+                else:
+                    batch_encoded_inputs['old_per_token_logps'] = None
                 if self.beta == 0.0:
                     ref_per_token_logps = None
                 elif self.ref_model is not None:
